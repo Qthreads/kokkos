@@ -53,7 +53,7 @@
 #define QTHREAD_LOCAL_PRIORITY
 #define CLONED_TASKS
 
-#include <qthread.h>
+#include <qthread/qthread.h>
 
 #include <cstddef>
 #include <iosfwd>
@@ -93,6 +93,7 @@ public:
   //! Tag this class as an execution space
   typedef Qthreads                 execution_space;
   typedef Kokkos::HostSpace        memory_space;
+
   //! This execution space preferred device_type
   typedef Kokkos::Device< execution_space, memory_space > device_type;
 
@@ -103,10 +104,13 @@ public:
 
   //@}
   /*------------------------------------------------------------------------*/
+  //! \name Functions that all Kokkos execution spaces must implement.
+  //@{
 
   /** \brief  Initialization will construct one or more instances */
   static Qthreads & instance( int = 0 );
 
+  static int get_current_max_threads() noexcept;
   /** \brief  Set the execution space to a "sleep" state.
    *
    * This function sets the "sleep" state in which it is not ready for work.
@@ -134,20 +138,31 @@ public:
    */
   static void fence();
 
+  /** \brief Print configuration information to the given output stream. */
+  static void print_configuration( std::ostream & , const bool detail = false );
+
+  /// \brief Free any resources being consumed by the device.
+  static void finalize();
+
   /*------------------------------------------------------------------------*/
 
-  static int in_parallel();
+  static void initialize( int thread_count );
+  static bool in_parallel();
 
   static int is_initialized();
 
   /** \brief  Return maximum amount of concurrency */
   static int concurrency();
 
-  static void initialize( int thread_count );
-  static void finalize();
 
-  /** \brief Print configuration information to the given output stream. */
-  static void print_configuration( std::ostream &, const bool detail = false );
+
+  inline static int thread_pool_size( int depth = 0 );
+
+  static int hardware_thread_id() noexcept;
+  // use UniqueToken
+  inline
+  static int max_hardware_threads() noexcept;
+
 
   int shepherd_size() const;
   int shepherd_worker_size() const;
@@ -192,6 +207,7 @@ struct VerifyExecutionCanAccessMemorySpace
 /*--------------------------------------------------------------------------*/
 
 #include <Qthreads/Kokkos_QthreadsExec.hpp>
+#include <Qthreads/Kokkos_Qthreads_Team.hpp>
 #include <Qthreads/Kokkos_Qthreads_Parallel.hpp>
 //#include <Qthreads/Kokkos_Qthreads_Task.hpp> // Uncomment when Tasking working.
 //#include <Qthreads/Kokkos_Qthreads_TaskQueue.hpp> // Uncomment when Tasking working.

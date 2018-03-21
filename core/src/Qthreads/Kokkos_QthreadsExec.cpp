@@ -52,25 +52,30 @@
 #include <sstream>
 #include <utility>
 
+#include <Kokkos_Core.hpp>
+
 #include <Kokkos_Qthreads.hpp>
 #include <Kokkos_Atomic.hpp>
 #include <impl/Kokkos_Error.hpp>
 
 // Defines to enable experimental Qthreads functionality.
-//#define QTHREAD_LOCAL_PRIORITY
-//#define CLONED_TASKS
+#define QTHREAD_LOCAL_PRIORITY
+#define CLONED_TASKS
 
-//#include <qthread.h>
+#include <qthread/qthread.h>
 
 //----------------------------------------------------------------------------
 
 namespace Kokkos {
 
-namespace Impl {
+  enum { MAXIMUM_QTHREADS_WORKERS = 1024 };
+  namespace Impl {
 
-namespace {
+int g_qthreads_hardware_max_threads = 1;
 
-enum { MAXIMUM_QTHREADS_WORKERS = 1024 };
+__thread int t_qthreads_hardware_id = 0;
+__thread Impl::QthreadsExec * t_qthreads_instance = nullptr;
+
 
 /** s_exec is indexed by the reverse rank of the workers
  *  for faster fan-in / fan-out lookups
@@ -97,48 +102,254 @@ int s_worker_shared_begin = 0;  // Beginning of worker shared memory.
 QthreadsExecFunctionPointer volatile s_active_function     = 0;
 const void                * volatile s_active_function_arg = 0;
 
-} // namespace
+void QthreadsExec::validate_partition( const int nthreads
+                                   , int & num_partitions
+                                   , int & partition_size
+                                  )
+{
+  if (nthreads == 1) {
+    num_partitions = 1;
+    partition_size = 1;
+  }
+  else if( num_partitions < 1 && partition_size < 1) {
+    int idle = nthreads;
+    for (int np = 2; np <= nthreads ; ++np) {
+      for (int ps = 1; ps <= nthreads/np; ++ps) {
+        if (nthreads - np*ps < idle) {
+          idle = nthreads - np*ps;
+          num_partitions = np;
+          partition_size = ps;
+        }
+        if (idle == 0) {
+          break;
+        }
+      }
+    }
+  }
+  else if( num_partitions < 1 && partition_size > 0 ) {
+    if ( partition_size <= nthreads ) {
+      num_partitions = nthreads / partition_size;
+    }
+    else {
+      num_partitions = 1;
+      partition_size = nthreads;
+    }
+  }
+  else if( num_partitions > 0 && partition_size < 1 ) {
+    if ( num_partitions <= nthreads ) {
+      partition_size = nthreads / num_partitions;
+    }
+    else {
+      num_partitions = nthreads;
+      partition_size = 1;
+    }
+  }
+  else if ( num_partitions * partition_size > nthreads ) {
+    int idle = nthreads;
+    const int NP = num_partitions;
+    const int PS = partition_size;
+    for (int np = NP; np > 0; --np) {
+      for (int ps = PS; ps > 0; --ps) {
+        if (  (np*ps <= nthreads)
+           && (nthreads - np*ps < idle) ) {
+          idle = nthreads - np*ps;
+          num_partitions = np;
+          partition_size = ps;
+        }
+        if (idle == 0) {
+          break;
+        }
+      }
+    }
+  }
+
+}
+
+void QthreadsExec::verify_is_master( const char * const label )
+{
+  if ( !t_qthreads_instance )
+  {
+    std::string msg( label );
+    msg.append( " ERROR: in parallel or not initialized" );
+    Kokkos::Impl::throw_runtime_exception( msg );
+  }
+}
+
 
 } // namespace Impl
+} // namespace Kokkos
 
+
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+namespace Kokkos {
+  namespace Impl {
+
+    void QthreadsExec::clear_thread_data()
+    {
+      const size_t member_bytes =
+        sizeof(int64_t) *
+        HostThreadTeamData::align_to_int64( sizeof(HostThreadTeamData) );
+
+      const int old_alloc_bytes =
+        m_pool[0] ? ( member_bytes + m_pool[0]->scratch_bytes() ) : 0 ;
+
+      Qthreads::memory_space space ;
+
+      //#pragma omp parallel num_threads( m_pool_size )
+      {
+        const int rank = 1; //omp_get_thread_num();
+
+        if ( 0 != m_pool[rank] ) {
+
+          m_pool[rank]->disband_pool();
+
+          space.deallocate( m_pool[rank] , old_alloc_bytes );
+
+          m_pool[rank] = 0 ;
+        }
+      }
+      /* END #pragma omp parallel */
+    }
+
+void QthreadsExec::resize_thread_data( size_t pool_reduce_bytes
+                                   , size_t team_reduce_bytes
+                                   , size_t team_shared_bytes
+                                   , size_t thread_local_bytes )
+{
+  const size_t member_bytes =
+    sizeof(int64_t) *
+    HostThreadTeamData::align_to_int64( sizeof(HostThreadTeamData) );
+
+  std::cout << "m_pool[0] " << m_pool[0] << std::endl;
+#if 0
+  //if(m_pool[0] == 0x3e8){
+    m_pool[0] = nullptr;
+    // Qthreads::memory_space space0 ;
+    // void * const ptr0 = space0.allocate( member_bytes );
+
+    // m_pool[ 0 ] = new( ptr0 ) HostThreadTeamData();
+
+  }
+#endif
+  HostThreadTeamData * root = m_pool[0] ;
+
+  const size_t old_pool_reduce  = root ? root->pool_reduce_bytes() : 0 ;
+  const size_t old_team_reduce  = root ? root->team_reduce_bytes() : 0 ;
+  const size_t old_team_shared  = root ? root->team_shared_bytes() : 0 ;
+  const size_t old_thread_local = root ? root->thread_local_bytes() : 0 ;
+  const size_t old_alloc_bytes  = root ? ( member_bytes + root->scratch_bytes() ) : 0 ;
+
+  // Allocate if any of the old allocation is tool small:
+  std::cout << "checking allocate " << std::endl;
+  const bool allocate = ( old_pool_reduce  < pool_reduce_bytes ) ||
+                        ( old_team_reduce  < team_reduce_bytes ) ||
+                        ( old_team_shared  < team_shared_bytes ) ||
+                        ( old_thread_local < thread_local_bytes );
+
+  if ( allocate ) {
+
+    if ( pool_reduce_bytes < old_pool_reduce ) { pool_reduce_bytes = old_pool_reduce ; }
+    if ( team_reduce_bytes < old_team_reduce ) { team_reduce_bytes = old_team_reduce ; }
+    if ( team_shared_bytes < old_team_shared ) { team_shared_bytes = old_team_shared ; }
+    if ( thread_local_bytes < old_thread_local ) { thread_local_bytes = old_thread_local ; }
+
+    std::cout << "scratch sizing" << std::endl;
+    const size_t alloc_bytes =
+      member_bytes +
+      HostThreadTeamData::scratch_size( pool_reduce_bytes
+                                      , team_reduce_bytes
+                                      , team_shared_bytes
+                                      , thread_local_bytes );
+
+    Qthreads::memory_space space ;
+
+    memory_fence();
+
+    // do in parallel get affinity.
+    //#pragma omp parallel num_threads(m_pool_size)
+    for(int i = 0; i < m_pool_size; i++ ){
+      const int rank =  i; //omp_get_thread_num();
+      std::cout << "adding rank " << rank << std::endl;
+      if ( 0 != m_pool[rank] ) {
+
+        m_pool[rank]->disband_pool();
+
+        space.deallocate( m_pool[rank] , old_alloc_bytes );
+      }
+
+      void * const ptr = space.allocate( alloc_bytes );
+
+      m_pool[ rank ] = new( ptr ) HostThreadTeamData();
+
+      m_pool[ rank ]->
+        scratch_assign( ((char *)ptr) + member_bytes
+                      , alloc_bytes
+                      , pool_reduce_bytes
+                      , team_reduce_bytes
+                      , team_shared_bytes
+                      , thread_local_bytes
+                      );
+
+      memory_fence();
+    }
+/* END #pragma omp parallel */
+
+    HostThreadTeamData::organize_pool( m_pool , m_pool_size );
+  }
+}
+} // namespace Impl
 } // namespace Kokkos
 
 //----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+
 
 namespace Kokkos {
+//----------------------------------------------------------------------------
 
-int Qthreads::is_initialized()
-{
-  return Impl::s_number_workers != 0;
-}
-
-int Qthreads::concurrency()
-{
-  return Impl::s_number_workers_per_shepherd;
-}
-
-int Qthreads::in_parallel()
-{
-  return Impl::s_active_function != 0;
-}
+  int Qthreads::get_current_max_threads() noexcept
+  {
+    return MAXIMUM_QTHREADS_WORKERS;
+  }
 
 void Qthreads::initialize( int thread_count )
 {
   // Environment variable: QTHREAD_NUM_SHEPHERDS
   // Environment variable: QTHREAD_NUM_WORKERS_PER_SHEP
   // Environment variable: QTHREAD_HWPAR
+  if ( Impl::t_qthreads_instance )
+    {
+      finalize();
+    }
 
+  Qthreads::memory_space space ;
+
+  std::cout << "INITIALIZING!!!" << std::endl;
   {
     char buffer[256];
+    printf("thread_count %d\n", thread_count);
     snprintf( buffer, sizeof(buffer), "QTHREAD_HWPAR=%d", thread_count );
     putenv( buffer );
   }
 
+  /* so what am I supposed to do with hwloc here? */
+
+  printf("qthread_initialize %d\n", qthread_initialize() );
+  printf("qthread_num_shepards %d qthread_num_workers_local( NO_SHEPHERD ) %d\n", qthread_num_shepherds(),   qthread_num_workers_local( NO_SHEPHERD ));
+  printf("qthread_num_workers() %d\n", qthread_num_workers() );
+  printf("thread_count %d\n", thread_count);
+  // hack fixme.
+  if(thread_count == -1)
+    thread_count = 4;
   const bool ok_init = ( QTHREAD_SUCCESS == qthread_initialize() ) &&
                        ( thread_count    == qthread_num_shepherds() * qthread_num_workers_local( NO_SHEPHERD ) ) &&
                        ( thread_count    == qthread_num_workers() );
 
   bool ok_symmetry = true;
+  printf("ok_init %d\n", ok_init);
+  printf("ok_symmetry %d\n", ok_symmetry);
+
 
   if ( ok_init ) {
     Impl::s_number_shepherds            = qthread_num_shepherds();
@@ -149,7 +360,7 @@ void Qthreads::initialize( int thread_count )
       ok_symmetry = ( Impl::s_number_workers_per_shepherd == qthread_num_workers_local( i ) );
     }
   }
-
+  printf("ok_symmetry after %d\n", ok_symmetry);
   if ( ! ok_init || ! ok_symmetry ) {
     std::ostringstream msg;
 
@@ -175,11 +386,46 @@ void Qthreads::initialize( int thread_count )
     Kokkos::Impl::throw_runtime_exception( msg.str() );
   }
 
-  Impl::QthreadsExec::resize_worker_scratch( 256, 256 );
+  Impl::g_qthreads_hardware_max_threads = qthread_num_shepherds() * qthread_num_workers(); // 512; //get_current_max_threads();
+
+  void * const ptr = space.allocate( sizeof(Impl::QthreadsExec ));
+  Impl::t_qthreads_instance = new (ptr) Impl::QthreadsExec( Impl::g_qthreads_hardware_max_threads );
+
+  std::cout << "resizing thread data " << std::endl;
+  // New, unified host thread team data:
+  {
+    size_t pool_reduce_bytes  =   32 * thread_count ;
+    size_t team_reduce_bytes  =   32 * thread_count ;
+    size_t team_shared_bytes  = 1024 * thread_count ;
+    size_t thread_local_bytes = 1024 ;
+
+    Impl::t_qthreads_instance->resize_thread_data( pool_reduce_bytes
+                                                 , team_reduce_bytes
+                                                 , team_shared_bytes
+                                                 , thread_local_bytes
+                                                 );
+  }
+  Impl::QthreadsExec::resize_worker_scratch( 1024, 1024 );
+
+
+  //Impl::QthreadsExec::resize_worker_scratch( 256, 256 );
+
+  // // Check for over-subscription
+  // if( Impl::mpi_ranks_per_node() * long(thread_count) > Impl::processors_per_node() ) {
+  //   std::cout << "Kokkos::Threads::initialize WARNING: You are likely oversubscribing your CPU cores." << std::endl;
+  //   std::cout << "                                    Detected: " << Impl::processors_per_node() << " cores per node." << std::endl;
+  //   std::cout << "                                    Detected: " << Impl::mpi_ranks_per_node() << " MPI_ranks per node." << std::endl;
+  //   std::cout << "                                    Requested: " << thread_count << " threads per process." << std::endl;
+  // }
 
   // Init the array for used for arbitrarily sized atomics.
   Impl::init_lock_array_host_space();
 
+  Impl::SharedAllocationRecord< void, void >::tracking_enable();
+
+#if defined(KOKKOS_ENABLE_PROFILING)
+  Kokkos::Profiling::initialize();
+#endif
 }
 
 void Qthreads::finalize()
@@ -194,6 +440,25 @@ void Qthreads::finalize()
   Impl::s_number_shepherds            = 0;
   Impl::s_number_workers_per_shepherd = 0;
 }
+  int Qthreads::is_initialized()
+  {
+    /*
+      if(Impl::s_number_workers == 0)
+      Qthreads::initialize(10);
+    */
+    return Impl::s_number_workers != 0;
+  }
+
+  int Qthreads::concurrency()
+  {
+    return Impl::s_number_workers_per_shepherd;
+  }
+
+  bool Qthreads::in_parallel()
+  {
+    return Impl::s_active_function != 0;
+  }
+
 
 void Qthreads::print_configuration( std::ostream & s, const bool detail )
 {
@@ -268,7 +533,7 @@ aligned_t driver_resize_worker_scratch( void * arg )
 
   lock_begin = 0; // Release lock.
 
-  if ( ok ) { new( *exec ) QthreadsExec(); }
+  if ( ok ) { new( *exec ) QthreadsExec( s_number_workers ); }
 
   //----------------------------------------
   // Wait for all calls to complete to insure that each worker has executed.
@@ -338,6 +603,13 @@ QthreadsExec::QthreadsExec()
   m_worker_rank          = worker_rank;
   m_worker_size          = s_number_workers;
   m_worker_state         = QthreadsExec::Active;
+  Qthreads::memory_space space ;
+
+  printf("allocating m_pool\n");
+  void * const ptr = space.allocate( sizeof(Impl::QthreadsExec) );
+  for(int i = 0; i < MAX_THREAD_COUNT; i++)
+      m_pool[ i ] = new( ptr ) HostThreadTeamData();
+  printf("allocated m_pool %p\n", &m_pool);
 }
 
 void QthreadsExec::clear_workers()

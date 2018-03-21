@@ -14,7 +14,7 @@ else
   CXX = g++
 endif
 
-CXXFLAGS = -O3
+CXXFLAGS = -O3 -g
 LINK ?= $(CXX)
 LDFLAGS ?=
 

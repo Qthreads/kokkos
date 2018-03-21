@@ -58,27 +58,41 @@ void HostThreadTeamData::organize_pool
 {
   bool ok = true ;
 
+  std::cout << "fencing" << std::endl;
   memory_fence();
 
+
+  std::cout << "checking members" << std::endl;
   // Verify not already a member of a pool:
   for ( int rank = 0 ; rank < size && ok ; ++rank ) {
+    //std::cout << "rank " << rank << "member " << members[rank] << std::endl;
     ok = ( nullptr != members[rank] ) && ( 0 == members[rank]->m_pool_scratch );
   }
 
   if ( ok ) {
 
+  std::cout << "checking scratch" << std::endl;
     int64_t * const root_scratch = members[0]->m_scratch ;
 
+  std::cout << "rendezvousing on scratch" << std::endl;
+  std::cout << "m_scratch" << members[0]->m_scratch << std::endl;
+  std::cout << "m_pool_rendezvous " << m_pool_rendezvous << std::endl;
+  std::cout << "m_pool_reduce " << m_pool_reduce << std::endl;
+  std::cout << "root_scratch " << root_scratch << std::endl;
     for ( int i = m_pool_rendezvous ; i < m_pool_reduce ; ++i ) {
+  //	std::cout << "root_scratch i " << i << std::endl;
       root_scratch[i] = 0 ;
     }
 
     {
+
+  std::cout << "checking pool" << std::endl;
       HostThreadTeamData ** const pool =
         (HostThreadTeamData **) (root_scratch + m_pool_members);
 
       // team size == 1, league size == pool_size
 
+  std::cout << "ranking on pools" << std::endl;
       for ( int rank = 0 ; rank < size ; ++rank ) {
         HostThreadTeamData * const mem = members[ rank ] ;
         mem->m_pool_scratch = root_scratch ;
@@ -96,11 +110,14 @@ void HostThreadTeamData::organize_pool
       }
     }
 
+  std::cout << "final fence" << std::endl;
     Kokkos::memory_fence();
   }
   else {
     Kokkos::Impl::throw_runtime_exception("Kokkos::Impl::HostThreadTeamData::organize_pool ERROR pool already exists");
   }
+
+  std::cout << "done" << std::endl;
 }
 
 void HostThreadTeamData::disband_pool()

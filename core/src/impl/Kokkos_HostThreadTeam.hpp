@@ -277,8 +277,14 @@ public:
   static constexpr int align_to_int64( int n )
     { return ( ( n + mask_to_16 ) & ~mask_to_16 ) >> shift_to_8 ; }
 
-  constexpr int pool_reduce_bytes() const
-    { return m_scratch_size ? sizeof(int64_t) * ( m_team_reduce - m_pool_reduce ) : 0 ; }
+  /* constexpr */ int pool_reduce_bytes() const
+    {
+	//std::cout << "m_scratch_size " << m_scratch_size;
+        //std::cout << " m_team_reduce " << m_team_reduce; 
+	//std::cout << " m_pool_reduce " << m_pool_reduce << std::endl; 
+	std::cout << "type of scratch size " << typeid(m_scratch_size).name() << std::endl;
+	return m_scratch_size ? sizeof(int64_t) * ( m_team_reduce - m_pool_reduce ) : 0 ; 
+}
 
   constexpr int team_reduce_bytes() const
     { return sizeof(int64_t) * ( m_team_shared - m_team_reduce ); }
@@ -301,7 +307,7 @@ public:
     { return m_pool_scratch + m_pool_reduce ; }
 
   int64_t * pool_reduce_local() const noexcept
-    { return m_scratch + m_pool_reduce ; }
+    { 	std::cout << "m_scratch " << m_scratch << " m_pool_reduce " << m_pool_reduce << std::endl; std::cout << "m_scratch + m_pool_reduce " << m_scratch + m_pool_reduce << std::endl; return m_scratch + m_pool_reduce ; }
 
   int64_t * team_reduce() const noexcept
     { return m_team_scratch + m_team_reduce ; }
@@ -359,18 +365,19 @@ public:
                      , int team_shared_size
                      , int /* thread_local_size */ )
     {
+      std::cout << "alloc_size " << alloc_size << std::endl;
       pool_reduce_size  = align_to_int64( pool_reduce_size );
       team_reduce_size  = align_to_int64( team_reduce_size );
       team_shared_size  = align_to_int64( team_shared_size );
       // thread_local_size = align_to_int64( thread_local_size );
-
+      std::cout << "assigning scratch to " << alloc_ptr << std::endl;
       m_scratch      = (int64_t *) alloc_ptr ;
       m_team_reduce  = m_pool_reduce + pool_reduce_size ;
       m_team_shared  = m_team_reduce + team_reduce_size ;
       m_thread_local = m_team_shared + team_shared_size ;
       m_scratch_size = align_to_int64( alloc_size );
 
-#if 0
+#if 1
 fprintf(stdout,"HostThreadTeamData::scratch_assign { %d %d %d %d %d %d %d }\n"
        , int(m_pool_members)
        , int(m_pool_rendezvous)
@@ -382,7 +389,7 @@ fprintf(stdout,"HostThreadTeamData::scratch_assign { %d %d %d %d %d %d %d }\n"
        );
 fflush(stdout);
 #endif
-
+	std::cout << "done assigning" << std::endl;
     }
 
   //----------------------------------------
@@ -400,23 +407,31 @@ fflush(stdout);
     {
       // Minimum chunk size to insure that
       //   m_work_end < std::numeric_limits<int>::max() * m_work_chunk
-
+      std::cout << " chunk min " << std::endl;
       int const chunk_min = ( length + std::numeric_limits<int>::max() )
                             / std::numeric_limits<int>::max();
-
+	
+      std::cout << " length " << length << std::endl;
+      std::cout << " chunk " << chunk << std::endl;
+      printf("m_work_end address %p\n", &m_work_end);
       m_work_end   = length ;
+      std::cout << " chunk size " << std::endl;
       m_work_chunk = std::max( chunk , chunk_min );
 
+      std::cout << " num " << std::endl;
       // Number of work chunks and partitioning of that number:
       int const num  = ( m_work_end + m_work_chunk - 1 ) / m_work_chunk ;
+      std::cout << "m_league_size " << m_league_size << std::endl;
       int const part = ( num + m_league_size - 1 ) / m_league_size ;
 
+      std::cout << " range " << std::endl;
       m_work_range.first  = part * m_league_rank ;
       m_work_range.second = m_work_range.first + part ;
 
       // Steal from next team, round robin
       // The next team is offset by m_team_alloc if it fits in the pool.
 
+      std::cout << " rank " << std::endl;
       m_steal_rank = m_team_base + m_team_alloc + m_team_size <= m_pool_size ?
                      m_team_base + m_team_alloc : 0 ;
     }

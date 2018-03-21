@@ -78,6 +78,12 @@ char** init_kokkos_args( bool do_threads, bool do_numa, bool do_device, bool do_
       nthreads = omp_get_max_threads();
 #endif
 
+#ifdef KOKKOS_ENABLE_Qthreads
+      printf("enabled qthreads nthreads %d\n", nthreads);
+      nthreads = 1;
+#endif
+
+
     if ( Kokkos::hwloc::available() ) {
       if ( Kokkos::hwloc::get_available_threads_per_core() < 3 )
         nthreads =   Kokkos::hwloc::get_available_threads_per_core()

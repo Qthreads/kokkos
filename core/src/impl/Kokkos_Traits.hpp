@@ -270,11 +270,11 @@ struct if_c
 
   template< class T >
   static KOKKOS_INLINE_FUNCTION
-  const_value_type & select( const T & , const_value_type & v ) { return v ; }
+  const_value_type & select( const T & , const_value_type & v ) { /* printf("inline const select\n"); */ return v ; }
 
   template< class T >
   static KOKKOS_INLINE_FUNCTION
-  value_type & select( const T & , value_type & v ) { return v ; }
+  value_type & select( const T & , value_type & v ) { /* printf("inline type select\n"); */ return v ; }
 };
 
 template <typename TrueType, typename FalseType>

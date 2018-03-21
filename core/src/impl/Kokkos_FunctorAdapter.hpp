@@ -506,7 +506,7 @@ struct FunctorValueInit
 {
   KOKKOS_FORCEINLINE_FUNCTION static
   T & init( const FunctorType & f , void * p )
-    { f.init( *((T*)p) ); return *((T*)p) ; }
+    { printf("single value init\n"); f.init( *((T*)p) ); printf("ran function\n"); return *((T*)p) ; }
 };
 
 /* 'init' function provided for array value */
@@ -522,7 +522,7 @@ struct FunctorValueInit
 {
   KOKKOS_FORCEINLINE_FUNCTION static
   T * init( const FunctorType & f , void * p )
-    { f.init( (T*)p ); return (T*)p ; }
+    { printf("two value init\n"); f.init( (T*)p ); return (T*)p ; }
 };
 
 /* 'init' function provided for single value */

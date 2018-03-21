@@ -310,10 +310,12 @@ endif
 
 KOKKOS_CPPFLAGS = -I./ -I$(KOKKOS_PATH)/core/src -I$(KOKKOS_PATH)/containers/src -I$(KOKKOS_PATH)/algorithms/src
 
-KOKKOS_CXXFLAGS =
-ifeq ($(KOKKOS_INTERNAL_ENABLE_COMPILER_WARNINGS), 1)
-  KOKKOS_CXXFLAGS += $(KOKKOS_INTERNAL_COMPILER_WARNINGS)
-endif
+# No warnings:
+KOKKOS_CXXFLAGS = -g
+# INTEL and CLANG warnings:
+#KOKKOS_CXXFLAGS = -Wall -Wshadow -pedantic -Wsign-compare -Wtype-limits -Wuninitialized
+# GCC warnings:
+#KOKKOS_CXXFLAGS = -Wall -Wshadow -pedantic -Wsign-compare -Wtype-limits -Wuninitialized -Wignored-qualifiers -Wempty-body -Wclobbered
 
 KOKKOS_LIBS = -lkokkos -ldl
 KOKKOS_LDFLAGS = -L$(shell pwd)
@@ -887,7 +889,7 @@ ifeq ($(KOKKOS_INTERNAL_USE_QTHREADS), 1)
   KOKKOS_SRC += $(wildcard $(KOKKOS_PATH)/core/src/Qthreads/*.cpp)
   KOKKOS_HEADERS += $(wildcard $(KOKKOS_PATH)/core/src/Qthreads/*.hpp)
   KOKKOS_CPPFLAGS += -I$(QTHREADS_PATH)/include
-  KOKKOS_LDFLAGS += -L$(QTHREADS_PATH)/lib
+  KOKKOS_LDFLAGS += -L$(QTHREADS_PATH)/src/.libs
   KOKKOS_LIBS += -lqthread
 endif
 

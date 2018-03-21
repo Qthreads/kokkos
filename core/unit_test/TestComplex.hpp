@@ -60,7 +60,7 @@ struct TestComplexConstruction {
     Kokkos::parallel_for(Kokkos::RangePolicy<ExecSpace>(0,1), *this);
     Kokkos::fence();
     Kokkos::deep_copy(h_results,d_results);
-
+    std::cout << h_results(0).imag() << " " << 2.5 << std::endl;
     ASSERT_FLOAT_EQ(h_results(0).real(),1.5);  ASSERT_FLOAT_EQ(h_results(0).imag(),2.5);
     ASSERT_FLOAT_EQ(h_results(1).real(),1.5);  ASSERT_FLOAT_EQ(h_results(1).imag(),2.5);
     ASSERT_FLOAT_EQ(h_results(2).real(),0.0);  ASSERT_FLOAT_EQ(h_results(2).imag(),0.0);

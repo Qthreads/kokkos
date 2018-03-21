@@ -47,20 +47,94 @@
 #include <Kokkos_Macros.hpp>
 #if defined( KOKKOS_ENABLE_QTHREADS )
 
+#include <Kokkos_Qthreads.hpp>
+
+#include <impl/Kokkos_Traits.hpp>
+#include <impl/Kokkos_HostThreadTeam.hpp>
+
+#include <Kokkos_Atomic.hpp>
+
+#include <Kokkos_UniqueToken.hpp>
+
 #include <impl/Kokkos_Spinwait.hpp>
 
 //----------------------------------------------------------------------------
 
-namespace Kokkos {
-
-namespace Impl {
+namespace Kokkos { namespace Impl {
 
 class QthreadsExec;
 
 typedef void (*QthreadsExecFunctionPointer)( QthreadsExec &, const void * );
 
+extern int g_qthreads_hardware_max_threads;
+
+extern __thread int t_qthreads_hardware_id;
+extern __thread QthreadsExec * t_qthreads_instance;
+
+//----------------------------------------------------------------------------
+/** \brief  Data for Qthreads thread execution */
+
 class QthreadsExec {
+public:
+
+  friend class Kokkos::Qthreads;
+
+  enum { MAX_THREAD_COUNT = 512 };
+
+  QthreadsExec( int arg_pool_size )
+    : m_pool_size{ arg_pool_size }
+    , m_level{ 1 }
+  {
+    Qthreads::memory_space space ;
+
+    printf("allocating m_pool\n");
+    void * const ptr = space.allocate( sizeof(Impl::QthreadsExec) );
+    for(int i = 0; i < MAX_THREAD_COUNT; i++)
+      m_pool[ i ] = new( ptr ) HostThreadTeamData();
+
+    printf("allocated m_pool %p\n", &m_pool);
+}
 private:
+
+  /*
+  const int shepherd_rank        = qthread_shep();
+  const int shepherd_worker_rank = qthread_worker_local( NULL );
+  const int worker_rank          = shepherd_rank * s_number_workers_per_shepherd + shepherd_worker_rank;
+  */
+  /*
+  QthreadsExec( int arg_pool_size )
+    : m_pool_size{ arg_pool_size }
+    , m_level{ 1 }
+    , m_pool()
+    , m_worker_base { s_exec }
+    , m_shepherd_base { s_exec + s_number_workers_per_shepherd * ( ( s_number_shepherds - ( shepherd_rank + 1 ) ) }
+    , m_scratch_alloc { ( (unsigned char *) this ) + s_base_size }
+    , m_reduce_end { s_worker_reduce_end }
+    , m_shepherd_rank { shepherd_rank }
+    , m_shepherd_size { s_number_shepherds }
+    , m_shepherd_worker_rank { shepherd_worker_rank }
+    , m_shepherd_worker_size { s_number_workers_per_shepherd }
+    , m_worker_rank          { worker_rank }
+    , m_worker_size          { s_number_workers }
+    , m_worker_state         { QthreadsExec::Active }
+  {}
+  */
+  ~QthreadsExec();
+  QthreadsExec( );
+  QthreadsExec( const QthreadsExec & ) {
+    /*
+    Qthreads::memory_space space ;
+
+    printf("allocating m_pool\n");
+    void * const ptr = space.allocate( sizeof(Impl::QthreadsExec) );
+    for(int i = 0; i < MAX_THREAD_COUNT; i++)
+      m_pool[ i ] = new( ptr ) HostThreadTeamData();
+    printf("allocated m_pool %p\n", &m_pool);
+    */
+  };
+  QthreadsExec & operator = ( const QthreadsExec & );
+
+
   enum { Inactive = 0, Active = 1 };
 
   const QthreadsExec * const * m_worker_base;
@@ -84,14 +158,125 @@ private:
 
   int mutable volatile m_worker_state;
 
-  friend class Kokkos::Qthreads;
 
-  ~QthreadsExec();
-  QthreadsExec( const QthreadsExec & );
-  QthreadsExec & operator = ( const QthreadsExec & );
+  int m_pool_size;
+  int m_level;
+
+  HostThreadTeamData * m_pool[ MAX_THREAD_COUNT ];
 
 public:
-  QthreadsExec();
+  static void verify_is_master( const char * const );
+  void clear_thread_data();
+
+  static void validate_partition( const int nthreads
+                                  , int & num_partitions
+                                  , int & partition_size
+                                  );
+
+  void resize_thread_data( size_t pool_reduce_bytes
+                           , size_t team_reduce_bytes
+                           , size_t team_shared_bytes
+                           , size_t thread_local_bytes );
+
+//  void resize_thread_data( size_t pool_reduce_bytes
+//                            , size_t team_reduce_bytes
+//                            , size_t team_shared_bytes
+//                            , size_t thread_local_bytes )
+//   {
+//     std::cout << "resizing thread data" << std::endl;
+//   const size_t member_bytes =
+//     sizeof(int64_t) *
+//     HostThreadTeamData::align_to_int64( sizeof(HostThreadTeamData) );
+
+//   std::cout << "mpooling" << std::endl;
+//   HostThreadTeamData * root = m_pool[0] ;
+
+//   const size_t old_pool_reduce  = root ? root->pool_reduce_bytes() : 0 ;
+//   const size_t old_team_reduce  = root ? root->team_reduce_bytes() : 0 ;
+//   const size_t old_team_shared  = root ? root->team_shared_bytes() : 0 ;
+//   const size_t old_thread_local = root ? root->thread_local_bytes() : 0 ;
+//   const size_t old_alloc_bytes  = root ? ( member_bytes + root->scratch_bytes() ) : 0 ;
+
+//   // Allocate if any of the old allocation is tool small:
+
+//   std::cout << "allocating" << std::endl;
+//   const bool allocate = ( old_pool_reduce  < pool_reduce_bytes ) ||
+//                         ( old_team_reduce  < team_reduce_bytes ) ||
+//                         ( old_team_shared  < team_shared_bytes ) ||
+//                         ( old_thread_local < thread_local_bytes );
+
+//   if ( allocate ) {
+
+//     std::cout << "should allocate" << std::endl;
+//     if ( pool_reduce_bytes < old_pool_reduce ) { pool_reduce_bytes = old_pool_reduce ; }
+//     if ( team_reduce_bytes < old_team_reduce ) { team_reduce_bytes = old_team_reduce ; }
+//     if ( team_shared_bytes < old_team_shared ) { team_shared_bytes = old_team_shared ; }
+//     if ( thread_local_bytes < old_thread_local ) { thread_local_bytes = old_thread_local ; }
+
+//     const size_t alloc_bytes =
+//       member_bytes +
+//       HostThreadTeamData::scratch_size( pool_reduce_bytes
+//                                       , team_reduce_bytes
+//                                       , team_shared_bytes
+//                                       , thread_local_bytes );
+
+//     Qthreads::memory_space space ;
+
+//     memory_fence();
+
+//     std::cout << "assigning scratch for pool of size " << m_pool_size << std::endl;
+//     // how should qthreads do this?
+//     //#pragma omp parallel num_threads(m_pool_size)
+//     {
+
+//       std::cout << "which rank am I?" << std::endl;
+//       const int rank = 0; // omp_get_thread_num();
+
+//       if ( 0 != m_pool[rank] ) {
+
+//         m_pool[rank]->disband_pool();
+
+//         space.deallocate( m_pool[rank] , old_alloc_bytes );
+//       }
+
+//       void * const ptr = space.allocate( alloc_bytes );
+
+//       m_pool[ rank ] = new( ptr ) HostThreadTeamData();
+
+//       std::cout << "assigning scratch" << std::endl;
+//       m_pool[ rank ]->
+//         scratch_assign( ((char *)ptr) + member_bytes
+//                       , alloc_bytes
+//                       , pool_reduce_bytes
+//                       , team_reduce_bytes
+//                       , team_shared_bytes
+//                       , thread_local_bytes
+//                       );
+
+//       std::cout << "assigned scratch" << std::endl;
+//       memory_fence();
+//     }
+// /* END #pragma omp parallel */
+
+//     std::cout << "organizing pool" << std::endl;
+
+//     std::cout << "m_pool " << m_pool << std::endl;
+//     std::cout << "m_pool_size " << m_pool_size << std::endl;
+//     HostThreadTeamData::organize_pool( m_pool , m_pool_size );
+//     std::cout << "organized pool" << std::endl;
+//   }
+
+
+
+//   }
+
+  inline
+  HostThreadTeamData * get_thread_data() const noexcept
+  { printf("m_pool %p\n", &m_pool); return m_pool[0]; }
+
+  inline
+  HostThreadTeamData * get_thread_data( int i ) const noexcept
+  { return m_pool[i]; }
 
   /** Execute the input function on all available Qthreads workers. */
   static void exec_all( Qthreads &, QthreadsExecFunctionPointer, const void * );
@@ -538,107 +723,43 @@ public:
   // Iterate.
   void next_team() { ++m_league_rank; m_exec.shared_reset( m_team_shared ); }
 };
-
-template< class ... Properties >
-class TeamPolicyInternal< Kokkos::Qthreads, Properties ... >
-  : public PolicyTraits< Properties... >
-{
-private:
-  const int m_league_size;
-  const int m_team_size;
-  const int m_shepherd_iter;
-
-public:
-  //! Tag this class as a kokkos execution policy.
-  typedef TeamPolicyInternal              execution_policy;
-  typedef Qthreads                        execution_space;
-  typedef PolicyTraits< Properties ... >  traits;
-
-  //----------------------------------------
-
-  template< class FunctorType >
-  inline static
-  int team_size_max( const FunctorType & )
-  { return Qthreads::instance().shepherd_worker_size(); }
-
-  template< class FunctorType >
-  static int team_size_recommended( const FunctorType & f )
-  { return team_size_max( f ); }
-
-  template< class FunctorType >
-  inline static
-  int team_size_recommended( const FunctorType & f, const int& )
-  { return team_size_max( f ); }
-
-  //----------------------------------------
-
-  inline int team_size()   const { return m_team_size; }
-  inline int league_size() const { return m_league_size; }
-
-  // One active team per shepherd.
-  TeamPolicyInternal( Kokkos::Qthreads & q
-                    , const int league_size
-                    , const int team_size
-                    , const int /* vector_length */ = 0
-                    )
-    : m_league_size( league_size )
-    , m_team_size( team_size < q.shepherd_worker_size()
-                 ? team_size : q.shepherd_worker_size() )
-    , m_shepherd_iter( ( league_size + q.shepherd_size() - 1 ) / q.shepherd_size() )
-  {}
-
-  // TODO: Make sure this is correct.
-  // One active team per shepherd.
-  TeamPolicyInternal( Kokkos::Qthreads & q
-                    , const int league_size
-                    , const Kokkos::AUTO_t & /* team_size_request */
-                    , const int /* vector_length */ = 0
-                    )
-    : m_league_size( league_size )
-    , m_team_size( q.shepherd_worker_size() )
-    , m_shepherd_iter( ( league_size + q.shepherd_size() - 1 ) / q.shepherd_size() )
-  {}
-
-  // One active team per shepherd.
-  TeamPolicyInternal( const int league_size
-                    , const int team_size
-                    , const int /* vector_length */ = 0
-                    )
-    : m_league_size( league_size )
-    , m_team_size( team_size < Qthreads::instance().shepherd_worker_size()
-                 ? team_size : Qthreads::instance().shepherd_worker_size() )
-    , m_shepherd_iter( ( league_size + Qthreads::instance().shepherd_size() - 1 ) / Qthreads::instance().shepherd_size() )
-  {}
-
-  // TODO: Make sure this is correct.
-  // One active team per shepherd.
-  TeamPolicyInternal( const int league_size
-                    , const Kokkos::AUTO_t & /* team_size_request */
-                    , const int /* vector_length */ = 0
-                    )
-    : m_league_size( league_size )
-    , m_team_size( Qthreads::instance().shepherd_worker_size() )
-    , m_shepherd_iter( ( league_size + Qthreads::instance().shepherd_size() - 1 ) / Qthreads::instance().shepherd_size() )
-  {}
-
-  // TODO: Doesn't do anything yet.  Fix this.
-  /** \brief set chunk_size to a discrete value*/
-  inline TeamPolicyInternal set_chunk_size(typename traits::index_type chunk_size_) const {
-    TeamPolicyInternal p = *this;
-//    p.m_chunk_size = chunk_size_;
-    return p;
-  }
-
-  typedef Impl::QthreadsTeamPolicyMember member_type;
-
-  friend class Impl::QthreadsTeamPolicyMember;
-};
-
 } // namespace Impl
 
 } // namespace Kokkos
 
-//----------------------------------------------------------------------------
+namespace Kokkos {
+#if !defined( KOKKOS_DISABLE_DEPRECATED )
+
+inline
+int Qthreads::thread_pool_size( int depth )
+{
+  std::cout << "depth " << depth << std::endl;
+  std::cout << "qthread_num_shepards " << qthread_num_shepherds << " qthread_num_workers " << qthread_num_workers() << std::endl;
+  return depth < 2
+                 ? qthread_num_shepherds()*qthread_num_workers()
+                 : 1;
+}
+
+KOKKOS_INLINE_FUNCTION
+int Qthreads::hardware_thread_id() noexcept
+{
+#if defined( KOKKOS_ACTIVE_EXECUTION_MEMORY_SPACE_HOST )
+  return Impl::t_qthreads_hardware_id;
+#else
+  return -1 ;
+#endif
+}
+
+inline
+int Qthreads::max_hardware_threads() noexcept
+{
+  return Impl::g_qthreads_hardware_max_threads;
+}
+
+#endif // KOKKOS_DISABLE_DEPRECATED
+
+} // namespace Kokkos
+
 
 #endif
 #endif // #define KOKKOS_QTHREADSEXEC_HPP

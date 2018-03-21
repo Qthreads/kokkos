@@ -41,71 +41,68 @@
 //@HEADER
 */
 
-#ifndef KOKKOS_TEST_QTHREADS_HPP
-#define KOKKOS_TEST_QTHREADS_HPP
+#ifndef KOKKOS_OPENMP_WORKGRAPHPOLICY_HPP
+#define KOKKOS_OPENMP_WORKGRAPHPOLICY_HPP
 
-#include <gtest/gtest.h>
+namespace Kokkos {
+namespace Impl {
 
-#include <Kokkos_Macros.hpp>
+template< class FunctorType , class ... Traits >
+class ParallelFor< FunctorType ,
+                   Kokkos::Experimental::WorkGraphPolicy< Traits ... > ,
+                   Kokkos::Qthreads
+                 >
+  : public Kokkos::Impl::Experimental::
+           WorkGraphExec< FunctorType,
+                          Kokkos::Qthreads,
+                          Traits ...
+                        >
+{
+private:
 
-#ifdef KOKKOS_LAMBDA
-#undef KOKKOS_LAMBDA
-#endif
-#define KOKKOS_LAMBDA [=]
+  typedef Kokkos::Experimental::WorkGraphPolicy< Traits ... > Policy ;
+  typedef Kokkos::Impl::Experimental::
+          WorkGraphExec<FunctorType, Kokkos::Qthreads, Traits ... > Base ;
 
-#include <Kokkos_Core.hpp>
-
-/*
-#include <TestTile.hpp>
-#include <TestSharedAlloc.hpp>
-#include <TestViewMapping.hpp>
-#include <TestViewAPI.hpp>
-#include <TestViewOfClass.hpp>
-#include <TestViewSubview.hpp>
-#include <TestAtomic.hpp>
-#include <TestAtomicOperations.hpp>
-#include <TestAtomicViews.hpp>
-#include <TestRange.hpp>
-#include <TestTeam.hpp>
-#include <TestReduce.hpp>
-#include <TestScan.hpp>
-#include <TestAggregate.hpp>
-#include <TestCompilerMacros.hpp>
-#include <TestTaskScheduler.hpp>
-#include <TestMemoryPool.hpp>
-#include <TestCXX11.hpp>
-#include <TestCXX11Deduction.hpp>
-#include <TestTeamVector.hpp>
-#include <TestTemplateMetaFunctions.hpp>
-#include <TestPolicyConstruction.hpp>
-#include <TestMDRange.hpp>
-*/
-
-namespace Test {
-
-class qthreads : public ::testing::Test {
-protected:
-  static void SetUpTestCase()
-  {
-    const unsigned numa_count       = Kokkos::hwloc::get_available_numa_count();
-    const unsigned cores_per_numa   = Kokkos::hwloc::get_available_cores_per_numa();
-    const unsigned threads_per_core = Kokkos::hwloc::get_available_threads_per_core();
-
-    const unsigned threads_count = std::max( 1u, numa_count ) *
-                                   std::max( 2u, ( cores_per_numa * threads_per_core ) / 2 );
-
-    Kokkos::Qthreads::initialize( threads_count );
-    Kokkos::print_configuration( std::cout, true );
-
-    srand( 10231 );
+  template< class TagType >
+  typename std::enable_if< std::is_same< TagType , void >::value >::type
+  exec_one(const typename Policy::member_type& i) const {
+    Base::m_functor( i );
   }
 
-  static void TearDownTestCase()
+  template< class TagType >
+  typename std::enable_if< ! std::is_same< TagType , void >::value >::type
+  exec_one(const typename Policy::member_type& i) const {
+    const TagType t{} ;
+    Base::m_functor( t , i );
+  }
+
+public:
+
+  inline
+  void execute()
   {
-    Kokkos::Qthreads::finalize();
+    Base::setup();
+    const int pool_size = Qthreads::thread_pool_size();
+
+    #pragma omp parallel num_threads(pool_size)
+    {
+      for (std::int32_t i; (-1 != (i = Base::before_work())); ) {
+        exec_one< typename Policy::work_tag >( i );
+        Base::after_work(i);
+      }
+    }
+  }
+
+  inline
+  ParallelFor( const FunctorType & arg_functor
+             , const Policy      & arg_policy )
+    : Base( arg_functor, arg_policy )
+  {
   }
 };
 
-} // namespace Test
+} // namespace Impl
+} // namespace Kokkos
 
-#endif
+#endif /* #define KOKKOS_OPENMP_WORKGRAPHPOLICY_HPP */

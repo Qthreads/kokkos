@@ -49,9 +49,9 @@ TEST_TARGETS += test-mempool
 
 #
 
-OBJ_TASKDAG = test_taskdag.o 
-TARGETS += KokkosCore_PerformanceTest_TaskDAG
-TEST_TARGETS += test-taskdag
+#OBJ_TASKDAG = test_taskdag.o 
+#TARGETS += KokkosCore_PerformanceTest_TaskDAG
+#TEST_TARGETS += test-taskdag
 
 #
 

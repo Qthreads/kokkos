@@ -75,8 +75,10 @@ void initialize_internal(const InitArguments& args)
 setenv("MEMKIND_HBW_NODES", "1", 0);
 #endif
 
+  printf("before ifdef %d\n", args.num_threads);
   // Protect declarations, to prevent "unused variable" warnings.
-#if defined( KOKKOS_ENABLE_OPENMP ) || defined( KOKKOS_ENABLE_THREADS ) || defined( KOKKOS_ENABLE_OPENMPTARGET )
+#if defined( KOKKOS_ENABLE_OPENMP ) || defined( KOKKOS_ENABLE_THREADS ) || defined( KOKKOS_ENABLE_OPENMPTARGET ) || defined ( KOKKOS_ENABLE_QTHREADS )
+  printf("after ifdef getting number of threads %d\n", args.num_threads);
   const int num_threads = args.num_threads;
   const int use_numa = args.num_numa;
 #endif // defined( KOKKOS_ENABLE_OPENMP ) || defined( KOKKOS_ENABLE_THREADS )
@@ -98,6 +100,25 @@ setenv("MEMKIND_HBW_NODES", "1", 0);
     //std::cout << "Kokkos::initialize() fyi: OpenMP enabled but not initialized" << std::endl ;
   }
 #endif
+
+#if defined( KOKKOS_ENABLE_QTHREADS )
+  if( std::is_same< Kokkos::Qthreads , Kokkos::DefaultExecutionSpace >::value ||
+      std::is_same< Kokkos::Qthreads , Kokkos::HostSpace::execution_space >::value ) {
+/*
+    if(use_numa>0) {
+      Kokkos::Qthreads::initialize(num_threads,use_numa);
+    }
+    else {
+*/
+      printf("%s: num_threads %d\n", __func__, num_threads);
+      Kokkos::Qthreads::initialize(num_threads);
+ //   }
+  }
+  else {
+    //std::cout << "Kokkos::initialize() fyi: OpenMP enabled but not initialized" << std::endl ;
+  }
+#endif
+
 
 #if defined( KOKKOS_ENABLE_THREADS )
   if( std::is_same< Kokkos::Threads , Kokkos::DefaultExecutionSpace >::value ||

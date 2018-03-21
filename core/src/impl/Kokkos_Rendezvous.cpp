@@ -60,8 +60,7 @@ namespace Kokkos { namespace Impl {
 
 int rendezvous( volatile int64_t * const buffer
               , int const size
-              , int const rank
-              , int const slow
+              , int /* const */ rank
               ) noexcept
 {
   enum : int { shift_byte = 3 };
@@ -97,6 +96,7 @@ int rendezvous( volatile int64_t * const buffer
 
   const int sync_offset = ( step & mask_mem_cycle ) + size_mem_cycle + size_mem_cycle ;
 
+  printf("rendezvous rank %d\n", rank);
   if ( rank ) {
 
     const int group_begin = rank << shift_byte ; // == rank * size_byte

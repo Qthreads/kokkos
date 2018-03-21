@@ -258,6 +258,10 @@ class WorkGraphExec
 #include "Cuda/Kokkos_Cuda_WorkGraphPolicy.hpp"
 #endif
 
+#ifdef KOKKOS_ENABLE_QTHREADS
+#include "Qthreads/Kokkos_Qthreads_WorkGraphPolicy.hpp"
+#endif
+
 #ifdef KOKKOS_ENABLE_THREADS
 #include "Threads/Kokkos_Threads_WorkGraphPolicy.hpp"
 #endif
